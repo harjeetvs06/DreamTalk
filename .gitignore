@@ -1,0 +1,39 @@
+# Environment files (contain real API keys — never commit these)
+.env
+**/.env
+.env.local
+**/.env.local
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+**/.venv/
+venv/
+**/venv/
+env/
+
+# Ollama / local model caches (if stored in-project)
+*.gguf
+models/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Distribution/build artifacts
+build/
+dist/
+*.egg
