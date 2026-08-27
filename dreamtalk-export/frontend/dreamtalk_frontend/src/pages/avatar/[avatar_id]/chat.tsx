@@ -40,18 +40,27 @@ export default function ChatRoom() {
   const [sending, setSending] = useState(false);
   const [emotion, setEmotion] = useState<string | EmotionState>('neutral');
   const [errorMsg, setErrorMsg] = useState('');
+  const [speechRequest, setSpeechRequest] = useState<{ id: string; text: string } | null>(null);
 
   const emotionPillRef = useRef<HTMLDivElement>(null);
 
   const handleVoiceTranscript = useCallback((text: string, sender: 'user' | 'avatar') => {
-    setMessages((previous) => [
-      ...previous,
-      {
-        id: `voice-${sender}-${Date.now()}-${crypto.randomUUID()}`,
-        sender,
-        text,
-      },
-    ]);
+    setMessages((previous) => {
+      // A typed response is rendered immediately from the Brain Module. Its
+      // LiveKit TTS transcript arrives later, so avoid showing that same
+      // assistant message twice.
+      if (sender === 'avatar' && previous.some((message) => message.sender === sender && message.text === text)) {
+        return previous;
+      }
+      return [
+        ...previous,
+        {
+          id: `voice-${sender}-${Date.now()}-${crypto.randomUUID()}`,
+          sender,
+          text,
+        },
+      ];
+    });
   }, []);
 
   // Client-side Gate: Fetch and check completion of the avatar
@@ -135,6 +144,7 @@ export default function ChatRoom() {
         text: data.response,
       };
       setMessages((prev) => [...prev, avatarMsg]);
+      setSpeechRequest({ id: avatarMsg.id, text: data.response });
       
       if (data.emotion) {
         setEmotion(data.emotion);
@@ -232,6 +242,8 @@ export default function ChatRoom() {
                 userId={user_id as string}
                 avatarName={avatar.name}
                 onTranscript={handleVoiceTranscript}
+                speechRequest={speechRequest}
+                onSpeechError={setErrorMsg}
               />
               <h2 className="text-2xl font-extrabold text-[#F5F5F0] font-heading">{avatar.name}</h2>
               <p className="text-sm text-[#9CA39A] mt-1">{avatar.profession}</p>
@@ -272,4 +284,3 @@ export default function ChatRoom() {
     </ProtectedRoute>
   );
 }
-

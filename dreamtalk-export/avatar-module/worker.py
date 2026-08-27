@@ -18,6 +18,7 @@ Install:
 
 import os
 import logging
+import json
 from pathlib import Path
 from typing import AsyncIterable
 
@@ -147,6 +148,12 @@ class BrainModuleAgent(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    # The browser uses this attribute to find the agent participant when it
+    # sends a typed reply to the existing AgentSession.  The Beyond Presence
+    # participant is a separate agent too, so relying on participant kind
+    # alone would be ambiguous.
+    await ctx.room.local_participant.set_attributes({"dreamtalk.role": "conversation-agent"})
+
     avatar_id = extract_avatar_id(ctx.room.name)
     logger.info(f"Joining room '{ctx.room.name}' with avatar_id='{avatar_id}'")
 
@@ -162,6 +169,28 @@ async def entrypoint(ctx: JobContext):
         logger.info("Starting AgentSession with elevenlabs voice_id=%s", ELEVEN_VOICE_ID or "<plugin-default>")
     except Exception:
         logger.exception("Failed logging ElevenLabs voice id")
+
+    @ctx.room.local_participant.register_rpc_method("dreamtalk.speak")
+    async def speak_typed_reply(data):
+        """Speak a server-generated typed reply through the avatar session.
+
+        AvatarSession replaces the AgentSession audio output with the Beyond
+        Presence stream, so ``session.say`` produces synchronized ElevenLabs
+        audio and avatar lip movement without a second browser audio player.
+        """
+        try:
+            payload = json.loads(data.payload)
+            text = payload.get("text") if isinstance(payload, dict) else None
+        except json.JSONDecodeError:
+            text = None
+
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("A non-empty text value is required.")
+        if len(text) > 5_000:
+            raise ValueError("Text exceeds the 5,000-character limit.")
+
+        await session.say(text.strip(), allow_interruptions=True)
+        return json.dumps({"status": "queued"})
 
     avatar = AvatarSession(avatar_id=avatar_id)
     await avatar.start(session, room=ctx.room)

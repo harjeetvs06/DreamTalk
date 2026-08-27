@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
-import { synthesizeSpeech } from '@/lib/brainApi';
 
 export interface Message {
   id: string;
@@ -54,9 +53,6 @@ function MessageBubble({ message }: { message: Message }) {
 export default function ChatInterface({ messages, onSendMessage, sending }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const prevLenRef = useRef<number>(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
 
   // Auto scroll to bottom when messages list updates
   useEffect(() => {
@@ -64,49 +60,6 @@ export default function ChatInterface({ messages, onSendMessage, sending }: Chat
       scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
   }, [messages]);
-
-  // Fetch ElevenLabs audio through our server-side proxy instead of using the
-  // browser's arbitrary default speech-synthesis voice.
-  useEffect(() => {
-    const newMsgs = messages.slice(prevLenRef.current);
-    const avatarMessage = newMsgs.find((message) => message.sender === 'avatar');
-    prevLenRef.current = messages.length;
-
-    if (!avatarMessage) return;
-
-    let cancelled = false;
-    void synthesizeSpeech(avatarMessage.text)
-      .then((audioBlob) => {
-        if (cancelled) return;
-
-        audioRef.current?.pause();
-        if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-
-        const audioUrl = URL.createObjectURL(audioBlob);
-        audioUrlRef.current = audioUrl;
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-        return audio.play();
-      })
-      .catch((error) => {
-        if (!cancelled) console.error('Failed to play ElevenLabs audio:', error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [messages]);
-
-  // Stop audio and free its temporary object URL when the chat is closed.
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-        audioUrlRef.current = null;
-      }
-    };
-  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,6 +120,5 @@ export default function ChatInterface({ messages, onSendMessage, sending }: Chat
     </div>
   );
 }
-
 
 

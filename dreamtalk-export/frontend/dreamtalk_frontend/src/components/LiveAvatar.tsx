@@ -17,6 +17,8 @@ interface LiveAvatarProps {
   userId: string;
   avatarName: string;
   onTranscript?: (text: string, sender: 'user' | 'avatar') => void;
+  speechRequest?: { id: string; text: string } | null;
+  onSpeechError?: (message: string) => void;
 }
 
 type CallState = 'idle' | 'connecting' | 'connected' | 'error';
@@ -26,7 +28,7 @@ type CallState = 'idle' | 'connecting' | 'connected' | 'error';
 // module -> TTS -> Beyond Presence) can hear and respond. This is the piece
 // the chat page was missing entirely - it never opened a LiveKit connection,
 // so there was never a video track to show.
-export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript }: LiveAvatarProps) {
+export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript, speechRequest, onSpeechError }: LiveAvatarProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [micEnabled, setMicEnabled] = useState(true);
@@ -70,7 +72,7 @@ export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript 
     setCallState('idle');
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (enableMicrophone = true): Promise<Room | null> => {
     setCallState('connecting');
     setErrorMsg('');
 
@@ -111,9 +113,12 @@ export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript 
       });
 
       await room.connect(session.serverUrl, session.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      if (enableMicrophone) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
       setMicEnabled(room.localParticipant.isMicrophoneEnabled);
       setCallState('connected');
+      return room;
     } catch (err) {
       console.error('Failed to start avatar session:', err);
       setErrorMsg(
@@ -122,8 +127,53 @@ export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript 
       setCallState('error');
       roomRef.current?.disconnect();
       roomRef.current = null;
+      return null;
     }
   }, [avatarId, userId, attachTrack, onTranscript]);
+
+  // Typed chat first receives its reply from the Brain Module, then sends
+  // that exact text to the active LiveKit agent. The agent's ElevenLabs TTS is
+  // routed through Beyond Presence, which is what keeps the video lip-synced.
+  useEffect(() => {
+    if (!speechRequest) return;
+
+    let cancelled = false;
+    const speak = async () => {
+      const room = roomRef.current || await connect(false);
+      if (!room || cancelled) throw new Error('Could not start the avatar session.');
+
+      // The agent worker may join a moment after the browser joins a new room.
+      // Wait briefly for its identifying attribute instead of failing the first
+      // typed message during that normal startup window.
+      let agent: RemoteParticipant | undefined;
+      for (let attempt = 0; attempt < 20 && !agent; attempt += 1) {
+        agent = [...room.remoteParticipants.values()].find(
+          (participant) => participant.attributes['dreamtalk.role'] === 'conversation-agent',
+        );
+        if (!agent) await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+      if (!agent) {
+        throw new Error('Avatar agent did not join in time. Please try again.');
+      }
+
+      await room.localParticipant.performRpc({
+        destinationIdentity: agent.identity,
+        method: 'dreamtalk.speak',
+        payload: JSON.stringify({ text: speechRequest.text }),
+        responseTimeout: 10_000,
+      });
+    };
+
+    void speak().catch((error) => {
+      if (cancelled) return;
+      console.error('Unable to send typed speech to the avatar:', error);
+      const message = error instanceof Error ? error.message : 'Unable to lip-sync this response.';
+      setErrorMsg(message);
+      onSpeechError?.(message);
+    });
+
+    return () => { cancelled = true; };
+  }, [speechRequest, connect, onSpeechError]);
 
   const toggleMic = useCallback(async () => {
     if (!roomRef.current) return;
@@ -160,7 +210,7 @@ export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript 
       <div className="absolute bottom-2 right-2 flex gap-2">
         {callState === 'idle' && (
           <button
-            onClick={connect}
+            onClick={() => void connect(true)}
             className="text-xs px-3 py-1.5 rounded-full font-semibold bg-[#C8F02D] text-[#0A0B0A] hover:brightness-95"
           >
             Start Voice Call
@@ -199,7 +249,7 @@ export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript 
         )}
         {callState === 'error' && (
           <button
-            onClick={connect}
+            onClick={() => void connect(true)}
             className="text-xs px-3 py-1.5 rounded-full font-semibold bg-red-950/70 text-red-300"
           >
             Retry
