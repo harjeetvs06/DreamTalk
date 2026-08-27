@@ -32,6 +32,21 @@ export async function uploadVoiceSample(avatarId: string, file: File) {
   return res.json(); // Expected return: { success: boolean, voice_sample_url: string, ... }
 }
 
+export async function synthesizeSpeech(text: string, voiceId?: string): Promise<Blob> {
+  const res = await fetch('/api/tts/synthesize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, ...(voiceId ? { voice_id: voiceId } : {}) }),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || `Speech synthesis error: status ${res.status}`);
+  }
+
+  return res.blob();
+}
+
 export async function uploadFaceSample(avatarId: string, file: File) {
   const formData = new FormData();
   formData.append('file', file);

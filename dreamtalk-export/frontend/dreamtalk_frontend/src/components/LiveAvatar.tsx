@@ -7,6 +7,8 @@ import {
   RemoteTrackPublication,
   RemoteParticipant,
   ConnectionState,
+  type Participant,
+  type TranscriptionSegment,
 } from 'livekit-client';
 import { getAvatarSession } from '@/lib/liveKitApi';
 
@@ -14,6 +16,7 @@ interface LiveAvatarProps {
   avatarId: string;
   userId: string;
   avatarName: string;
+  onTranscript?: (text: string, sender: 'user' | 'avatar') => void;
 }
 
 type CallState = 'idle' | 'connecting' | 'connected' | 'error';
@@ -23,20 +26,41 @@ type CallState = 'idle' | 'connecting' | 'connected' | 'error';
 // module -> TTS -> Beyond Presence) can hear and respond. This is the piece
 // the chat page was missing entirely - it never opened a LiveKit connection,
 // so there was never a video track to show.
-export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarProps) {
+export default function LiveAvatar({ avatarId, userId, avatarName, onTranscript }: LiveAvatarProps) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [micEnabled, setMicEnabled] = useState(true);
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const roomRef = useRef<Room | null>(null);
+  const seenTranscriptIdsRef = useRef<Set<string>>(new Set());
 
   const attachTrack = useCallback((track: RemoteTrack) => {
     if (track.kind === Track.Kind.Video && videoRef.current) {
       track.attach(videoRef.current);
     } else if (track.kind === Track.Kind.Audio && audioRef.current) {
       track.attach(audioRef.current);
+      // Some browsers require an explicit play() even when the element has
+      // autoPlay. This makes the avatar's LiveKit audio audible after it joins.
+      void audioRef.current.play().then(() => {
+        setAudioPlaybackBlocked(false);
+      }).catch(() => {
+        setAudioPlaybackBlocked(true);
+        setErrorMsg('Avatar audio is blocked by the browser. Click “Enable Avatar Audio”.');
+      });
+    }
+  }, []);
+
+  const enableAvatarAudio = useCallback(async () => {
+    try {
+      await audioRef.current?.play();
+      setAudioPlaybackBlocked(false);
+      setErrorMsg('');
+    } catch (error) {
+      console.error('Unable to enable avatar audio:', error);
+      setErrorMsg('The browser is still blocking avatar audio. Check this tab is not muted.');
     }
   }, []);
 
@@ -54,6 +78,7 @@ export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarP
       const session = await getAvatarSession(avatarId, userId);
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
+      seenTranscriptIdsRef.current.clear();
 
       room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub: RemoteTrackPublication, participant: RemoteParticipant) => {
         // The Beyond Presence avatar joins as its own participant (not the
@@ -61,6 +86,20 @@ export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarP
         attachTrack(track);
         void participant;
       });
+
+      room.on(
+        RoomEvent.TranscriptionReceived,
+        (segments: TranscriptionSegment[], participant?: Participant) => {
+          // The worker publishes both STT and TTS transcripts. Wait for final
+          // segments so each sentence is added to the chat only once.
+          const sender = participant?.identity === room.localParticipant.identity ? 'user' : 'avatar';
+          for (const segment of segments) {
+            if (!segment.final || !segment.text.trim() || seenTranscriptIdsRef.current.has(segment.id)) continue;
+            seenTranscriptIdsRef.current.add(segment.id);
+            onTranscript?.(segment.text.trim(), sender);
+          }
+        },
+      );
 
       room.on(RoomEvent.Disconnected, () => {
         setCallState('idle');
@@ -73,7 +112,7 @@ export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarP
 
       await room.connect(session.serverUrl, session.token);
       await room.localParticipant.setMicrophoneEnabled(true);
-      setMicEnabled(true);
+      setMicEnabled(room.localParticipant.isMicrophoneEnabled);
       setCallState('connected');
     } catch (err) {
       console.error('Failed to start avatar session:', err);
@@ -84,13 +123,13 @@ export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarP
       roomRef.current?.disconnect();
       roomRef.current = null;
     }
-  }, [avatarId, userId, attachTrack]);
+  }, [avatarId, userId, attachTrack, onTranscript]);
 
   const toggleMic = useCallback(async () => {
     if (!roomRef.current) return;
     const next = !micEnabled;
     await roomRef.current.localParticipant.setMicrophoneEnabled(next);
-    setMicEnabled(next);
+    setMicEnabled(roomRef.current.localParticipant.isMicrophoneEnabled);
   }, [micEnabled]);
 
   // Clean up the room connection when the chat page unmounts (e.g. user
@@ -148,6 +187,14 @@ export default function LiveAvatar({ avatarId, userId, avatarName }: LiveAvatarP
             >
               End Call
             </button>
+            {audioPlaybackBlocked && (
+              <button
+                onClick={enableAvatarAudio}
+                className="text-xs px-3 py-1.5 rounded-full font-semibold bg-[#C8F02D] text-[#0A0B0A]"
+              >
+                Enable Avatar Audio
+              </button>
+            )}
           </>
         )}
         {callState === 'error' && (

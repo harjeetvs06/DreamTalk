@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import gsap from 'gsap';
@@ -42,6 +42,17 @@ export default function ChatRoom() {
   const [errorMsg, setErrorMsg] = useState('');
 
   const emotionPillRef = useRef<HTMLDivElement>(null);
+
+  const handleVoiceTranscript = useCallback((text: string, sender: 'user' | 'avatar') => {
+    setMessages((previous) => [
+      ...previous,
+      {
+        id: `voice-${sender}-${Date.now()}-${crypto.randomUUID()}`,
+        sender,
+        text,
+      },
+    ]);
+  }, []);
 
   // Client-side Gate: Fetch and check completion of the avatar
   useEffect(() => {
@@ -216,7 +227,12 @@ export default function ChatRoom() {
           {/* Left Side: Full-Height Avatar Profile Card */}
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 rounded-3xl p-6 bg-[#161715] flex flex-col justify-between overflow-y-auto h-full">
             <div>
-              <LiveAvatar avatarId={avatar.avatar_id} userId={user_id as string} avatarName={avatar.name} />
+              <LiveAvatar
+                avatarId={avatar.avatar_id}
+                userId={user_id as string}
+                avatarName={avatar.name}
+                onTranscript={handleVoiceTranscript}
+              />
               <h2 className="text-2xl font-extrabold text-[#F5F5F0] font-heading">{avatar.name}</h2>
               <p className="text-sm text-[#9CA39A] mt-1">{avatar.profession}</p>
               
@@ -256,5 +272,4 @@ export default function ChatRoom() {
     </ProtectedRoute>
   );
 }
-
 

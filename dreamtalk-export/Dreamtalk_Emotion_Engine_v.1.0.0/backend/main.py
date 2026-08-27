@@ -11,9 +11,14 @@ import uvicorn
 import sys
 import os
 import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
 
 # Ensure all modules are in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Load environment variables from backend/.env (if present)
+load_dotenv(dotenv_path=Path(__file__).parent / '.env')
 
 from emotion.engine import PADEmotionEngine
 from memory.system import MemorySystem

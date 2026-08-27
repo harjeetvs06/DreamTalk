@@ -31,10 +31,12 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
+    llm,
 )
 from livekit.agents.llm import ChatContext, ChatChunk
 from livekit.plugins import elevenlabs, silero
 from livekit.plugins.bey import AvatarSession
+from audio_responder import check_hardcoded_response
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
@@ -44,6 +46,30 @@ logger.setLevel(logging.INFO)
 BRAIN_MODULE_URL = os.getenv("BRAIN_MODULE_URL", "http://localhost:8000")
 ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID")  # optional, falls back to plugin default
 DEFAULT_AVATAR_ID = os.getenv("DEFAULT_BEY_AVATAR_ID")  # fallback if room name has none
+
+# Log configured ElevenLabs voice id at startup for easier debugging
+logger.info("Configured ELEVEN_VOICE_ID=%s", ELEVEN_VOICE_ID or "<not-set; using plugin default>")
+
+
+class BrainModuleLLM(llm.LLM):
+    """Enables LiveKit's reply pipeline while BrainModuleAgent supplies the text.
+
+    Recent LiveKit versions skip automatic replies when ``AgentSession.llm`` is
+    ``None``—even if the agent overrides ``llm_node``. This marker satisfies
+    that requirement; its ``chat`` method is never used because
+    ``BrainModuleAgent.llm_node`` makes the HTTP call to the Brain Module.
+    """
+
+    @property
+    def model(self) -> str:
+        return "dreamtalk-brain-module"
+
+    @property
+    def provider(self) -> str:
+        return "dreamtalk"
+
+    def chat(self, **_kwargs):
+        raise RuntimeError("BrainModuleLLM.chat should not be called; use BrainModuleAgent.llm_node.")
 
 
 def extract_avatar_id(room_name: str) -> str:
@@ -84,6 +110,17 @@ class BrainModuleAgent(Agent):
         if not last_user_text:
             return
 
+        # Check for simple hardcoded responses first to avoid calling
+        # the external brain module for trivial prompts.
+        try:
+            hardcoded = check_hardcoded_response(last_user_text)
+            if hardcoded:
+                yield hardcoded
+                return
+        except Exception:
+            # Fail silently and fall back to brain module for robustness.
+            logger.exception("audio_responder check failed")
+
         try:
             async with aiohttp.ClientSession() as http:
                 async with http.post(
@@ -115,9 +152,16 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         stt=elevenlabs.STT(),
+        llm=BrainModuleLLM(),
         tts=elevenlabs.TTS(voice_id=ELEVEN_VOICE_ID) if ELEVEN_VOICE_ID else elevenlabs.TTS(),
         vad=silero.VAD.load(),
     )
+
+    # Log the voice id used for this session (helps confirm plugin behavior)
+    try:
+        logger.info("Starting AgentSession with elevenlabs voice_id=%s", ELEVEN_VOICE_ID or "<plugin-default>")
+    except Exception:
+        logger.exception("Failed logging ElevenLabs voice id")
 
     avatar = AvatarSession(avatar_id=avatar_id)
     await avatar.start(session, room=ctx.room)
