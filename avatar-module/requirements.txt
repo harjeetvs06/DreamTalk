@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-pydantic
-livekit-agents
-livekit-plugins-elevenlabs
-livekit-plugins-silero
-livekit-plugins-bey
-aiohttp
